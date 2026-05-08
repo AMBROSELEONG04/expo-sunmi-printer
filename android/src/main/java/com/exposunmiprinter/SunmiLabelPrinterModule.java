@@ -358,7 +358,7 @@ public class SunmiLabelPrinterModule extends ReactContextBaseJavaModule {
         promise.reject("INVALID_IMAGE", "Could not decode base64 image");
         return;
       }
-      printerService.printBitmap(bitmap, type, null);
+      printerService.printBitmap(bitmap, null); 
       promise.resolve(true);
     } catch (RemoteException e) {
       promise.reject("PRINT_BITMAP_ERROR", e.getMessage());
