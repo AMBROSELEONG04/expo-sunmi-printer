@@ -20,10 +20,10 @@ import com.facebook.react.bridge.WritableMap;
 import com.sunmi.printerx.PrinterSdk;
 import com.sunmi.printerx.SdkException;
 import com.sunmi.printerx.api.CanvasApi;
-import com.sunmi.printerx.api.LineApi;
 import com.sunmi.printerx.api.PrintResult;
 import com.sunmi.printerx.enums.HumanReadable;
 import com.sunmi.printerx.enums.ImageAlgorithm;
+import com.sunmi.printerx.enums.Shape;
 import com.sunmi.printerx.style.AreaStyle;
 import com.sunmi.printerx.style.BarcodeStyle;
 import com.sunmi.printerx.style.BaseStyle;
@@ -31,26 +31,14 @@ import com.sunmi.printerx.style.BitmapStyle;
 import com.sunmi.printerx.style.QrStyle;
 import com.sunmi.printerx.style.TextStyle;
 
-/**
- * React Native module for Sunmi Label Printer — PrinterX SDK
- *
- * Uses Canvas API for precise label layout (pixel-based positioning).
- * 1mm = 8 pixels on Sunmi label printers.
- *
- * Printing flow:
- *   initPrinter()
- *   → printLabel({ width, height, copies, elements: [...] })
- *       internally: initCanvas → render elements → printCanvas
- *
- * Supported devices: Sunmi V2 Pro, V2s, and other Sunmi devices with label printer
- */
+import java.util.List;
+
 public class SunmiLabelPrinterModule extends ReactContextBaseJavaModule {
 
     private static final String TAG = "SunmiLabelPrinter";
     private static final String MODULE_NAME = "SunmiLabelPrinter";
 
     private PrinterSdk.Printer printer;
-    private PrinterSdk printerSdk;
 
     public SunmiLabelPrinterModule(ReactApplicationContext reactContext) {
         super(reactContext);
@@ -66,10 +54,6 @@ public class SunmiLabelPrinterModule extends ReactContextBaseJavaModule {
     // Connection
     // ─────────────────────────────────────────────────────────────────────────
 
-    /**
-     * Initialise the PrinterX SDK and get the first available printer.
-     * Must be called before any printing.
-     */
     @ReactMethod
     public void initPrinter(final Promise promise) {
         try {
@@ -82,8 +66,8 @@ public class SunmiLabelPrinterModule extends ReactContextBaseJavaModule {
                     }
 
                     @Override
-                    public void onPrinters(java.util.List<PrinterSdk.Printer> printers) {
-                        // Called with all available printers; we use the default one
+                    public void onPrinters(List<PrinterSdk.Printer> printers) {
+                        // use default printer from onDefPrinter
                     }
                 });
         } catch (SdkException e) {
@@ -92,13 +76,11 @@ public class SunmiLabelPrinterModule extends ReactContextBaseJavaModule {
         }
     }
 
-    /**
-     * Release the printer SDK resources.
-     */
     @ReactMethod
     public void deInitPrinter(Promise promise) {
         try {
-            PrinterSdk.getInstance().destroy(getReactApplicationContext());
+            // destroy() takes no arguments in printerx 1.0.18
+            PrinterSdk.getInstance().destroy();
             printer = null;
             promise.resolve(true);
         } catch (Exception e) {
@@ -111,59 +93,31 @@ public class SunmiLabelPrinterModule extends ReactContextBaseJavaModule {
         promise.resolve(printer != null);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Status & Info
-    // ─────────────────────────────────────────────────────────────────────────
-
     @ReactMethod
     public void getPrinterInfo(Promise promise) {
-        if (!checkPrinter(promise)) return;
-        try {
-            WritableMap map = Arguments.createMap();
-            map.putString("model",   printer.getInfo("type", ""));
-            map.putString("name",    printer.getInfo("name", ""));
-            promise.resolve(map);
-        } catch (Exception e) {
-            promise.reject("INFO_ERROR", e.getMessage());
-        }
+        // PrinterSdk.Printer has no getInfo() in 1.0.18 — return what we have
+        WritableMap map = Arguments.createMap();
+        map.putBoolean("connected", printer != null);
+        promise.resolve(map);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // High-level Label API  (Canvas-based, pixel-positioned)
+    // Label Printing  (Canvas API)
+    //
+    // Size guide: 1mm = 8px
+    //   30×20mm  → width:240,  height:160
+    //   48×30mm  → width:384,  height:240
+    //   53×28mm  → width:420,  height:220
     // ─────────────────────────────────────────────────────────────────────────
 
     /**
-     * Print a complete label using the Canvas API.
+     * Print a single label.
      *
-     * labelConfig keys:
-     *   width   (int)  – canvas width in pixels  (1mm = 8px; e.g. 48mm → 384)
-     *   height  (int)  – canvas height in pixels (e.g. 30mm → 240, 25mm → 200)
-     *   copies  (int)  – number of copies (default 1)
-     *   elements (array) – list of elements to render:
-     *
-     * Element types:
-     *
-     *   TEXT:
-     *     { type:"text", text, x, y, width?, height?,
-     *       fontSize?, bold?, italic?, underline?,
-     *       widthRatio?, heightRatio? }
-     *
-     *   BARCODE:
-     *     { type:"barcode", data, x, y, width?, height?,
-     *       dotWidth?,   (bar width, default 2)
-     *       barHeight?,  (bar height in px, default 60)
-     *       readable?    (0=none, 1=above, 2=below, default 2) }
-     *
-     *   QRCODE:
-     *     { type:"qrcode", data, x, y, width?, height?,
-     *       dot? (module size, default 4) }
-     *
-     *   IMAGE:
-     *     { type:"image", imageBase64, x, y, width?, height?,
-     *       dithering? (bool, default false) }
-     *
-     *   BOX (border/rectangle):
-     *     { type:"box", x, y, width, height }
+     * labelConfig:
+     *   width    (int)   canvas width in px
+     *   height   (int)   canvas height in px
+     *   copies   (int)   number of copies (default 1)
+     *   elements (array) see renderElement() for element types
      */
     @ReactMethod
     public void printLabel(ReadableMap labelConfig, final Promise promise) {
@@ -175,29 +129,24 @@ public class SunmiLabelPrinterModule extends ReactContextBaseJavaModule {
             ReadableArray elements = labelConfig.hasKey("elements") ? labelConfig.getArray("elements") : null;
 
             CanvasApi api = printer.canvasApi();
-
-            // Step 1: initialise canvas with dimensions
             api.initCanvas(BaseStyle.getStyle()
                     .setWidth(canvasWidth)
                     .setHeight(canvasHeight));
 
-            // Step 2: render each element
             if (elements != null) {
                 for (int i = 0; i < elements.size(); i++) {
                     ReadableMap el = elements.getMap(i);
-                    if (el == null) continue;
-                    renderElement(api, el);
+                    if (el != null) renderElement(api, el);
                 }
             }
 
-            // Step 3: print with callback
             api.printCanvas(copies, new PrintResult() {
                 @Override
                 public void onResult(int resultCode, String message) throws RemoteException {
                     if (resultCode == 0) {
                         promise.resolve(true);
                     } else {
-                        promise.reject("PRINT_FAILED", "Print failed: " + message);
+                        promise.reject("PRINT_FAILED", "Print error: " + message);
                     }
                 }
             });
@@ -209,14 +158,11 @@ public class SunmiLabelPrinterModule extends ReactContextBaseJavaModule {
     }
 
     /**
-     * Print multiple different labels in one call.
-     * Each entry in labelsConfig is a full label config (same as printLabel).
-     * Callback resolves after all labels are printed.
+     * Print multiple different labels sequentially.
      */
     @ReactMethod
     public void printLabels(ReadableArray labelsConfig, final Promise promise) {
         if (!checkPrinter(promise)) return;
-        // Print sequentially; resolve after the last one
         printLabelAt(labelsConfig, 0, promise);
     }
 
@@ -224,7 +170,6 @@ public class SunmiLabelPrinterModule extends ReactContextBaseJavaModule {
     // Private helpers
     // ─────────────────────────────────────────────────────────────────────────
 
-    /** Recursively print labels one by one to preserve order */
     private void printLabelAt(final ReadableArray labelsConfig, final int idx, final Promise promise) {
         if (idx >= labelsConfig.size()) {
             promise.resolve(true);
@@ -247,8 +192,7 @@ public class SunmiLabelPrinterModule extends ReactContextBaseJavaModule {
             if (elements != null) {
                 for (int i = 0; i < elements.size(); i++) {
                     ReadableMap el = elements.getMap(i);
-                    if (el == null) continue;
-                    renderElement(api, el);
+                    if (el != null) renderElement(api, el);
                 }
             }
 
@@ -268,7 +212,9 @@ public class SunmiLabelPrinterModule extends ReactContextBaseJavaModule {
     }
 
     /**
-     * Render a single element onto the canvas.
+     * Render one element onto the canvas.
+     *
+     * Supported types: text | barcode | qrcode | image | box
      */
     private void renderElement(CanvasApi api, ReadableMap el) throws SdkException {
         String type = el.hasKey("type") ? el.getString("type") : "text";
@@ -281,14 +227,15 @@ public class SunmiLabelPrinterModule extends ReactContextBaseJavaModule {
                 TextStyle style = TextStyle.getStyle()
                         .setPosX(x)
                         .setPosY(y);
-                if (el.hasKey("fontSize"))    style.setTextSize(el.getInt("fontSize"));
-                if (el.hasKey("bold") && el.getBoolean("bold"))           style.enableBold(true);
-                if (el.hasKey("italic") && el.getBoolean("italic"))       style.enableItalic(true);
+                if (el.hasKey("fontSize")) style.setTextSize(el.getInt("fontSize"));
+                if (el.hasKey("bold") && el.getBoolean("bold")) style.enableBold(true);
+                // Note: enableItalic() does not exist in printerx 1.0.18 — omitted
                 if (el.hasKey("underline") && el.getBoolean("underline")) style.enableUnderline(true);
                 if (el.hasKey("width"))       style.setWidth(el.getInt("width"));
                 if (el.hasKey("height"))      style.setHeight(el.getInt("height"));
-                if (el.hasKey("widthRatio"))  style.setTextWidthRatio((float) el.getDouble("widthRatio"));
-                if (el.hasKey("heightRatio")) style.setTextHeightRatio((float) el.getDouble("heightRatio"));
+                // setTextWidthRatio / setTextHeightRatio accept int in 1.0.18
+                if (el.hasKey("widthRatio"))  style.setTextWidthRatio((int) el.getDouble("widthRatio"));
+                if (el.hasKey("heightRatio")) style.setTextHeightRatio((int) el.getDouble("heightRatio"));
                 String text = el.hasKey("text") ? el.getString("text") : "";
                 api.renderText(text, style);
                 break;
@@ -302,10 +249,14 @@ public class SunmiLabelPrinterModule extends ReactContextBaseJavaModule {
                 if (el.hasKey("height"))    style.setHeight(el.getInt("height"));
                 if (el.hasKey("dotWidth"))  style.setDotWidth(el.getInt("dotWidth"));
                 if (el.hasKey("barHeight")) style.setBarHeight(el.getInt("barHeight"));
+                // HumanReadable enum values in 1.0.18: POS_ONE, POS_TWO only
                 int readable = el.hasKey("readable") ? el.getInt("readable") : 2;
-                style.setReadable(readable == 1 ? HumanReadable.POS_ONE
-                                : readable == 2 ? HumanReadable.POS_TWO
-                                : HumanReadable.NONE);
+                if (readable == 1) {
+                    style.setReadable(HumanReadable.POS_ONE);
+                } else if (readable == 2) {
+                    style.setReadable(HumanReadable.POS_TWO);
+                }
+                // readable == 0: don't call setReadable → no text shown (SDK default)
                 String data = el.hasKey("data") ? el.getString("data") : "";
                 api.renderBarCode(data, style);
                 break;
@@ -341,7 +292,7 @@ public class SunmiLabelPrinterModule extends ReactContextBaseJavaModule {
 
             case "box": {
                 AreaStyle style = AreaStyle.getStyle()
-                        .setStyle(com.sunmi.printerx.enums.Shape.BOX)
+                        .setStyle(Shape.BOX)
                         .setPosX(x)
                         .setPosY(y);
                 if (el.hasKey("width"))  style.setWidth(el.getInt("width"));
@@ -357,8 +308,7 @@ public class SunmiLabelPrinterModule extends ReactContextBaseJavaModule {
 
     private boolean checkPrinter(Promise promise) {
         if (printer == null) {
-            promise.reject("NOT_CONNECTED",
-                    "Printer not connected. Call initPrinter() first.");
+            promise.reject("NOT_CONNECTED", "Printer not connected. Call initPrinter() first.");
             return false;
         }
         return true;
