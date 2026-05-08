@@ -1,9 +1,8 @@
 import { TurboModuleRegistry, type TurboModule } from 'react-native';
-import type { UnsafeObject } from 'react-native/Libraries/Types/CodegenTypes';
 
 /**
  * TurboModule spec for SunmiLabelPrinter.
- * Defines the native interface boundary.
+ * Uses plain Object types to avoid RN version-specific internal imports.
  */
 export interface Spec extends TurboModule {
   // Connection
@@ -12,8 +11,8 @@ export interface Spec extends TurboModule {
   isConnected(): Promise<boolean>;
 
   // Status & Info
-  getPrinterStatus(): Promise<UnsafeObject>;
-  getPrinterInfo(): Promise<UnsafeObject>;
+  getPrinterStatus(): Promise<Object>;
+  getPrinterInfo(): Promise<Object>;
 
   // Label positioning (low-level)
   labelLocate(): Promise<boolean>;
@@ -35,8 +34,8 @@ export interface Spec extends TurboModule {
   printBitmapBase64(base64Image: string, type: number): Promise<boolean>;
 
   // High-level label API
-  printLabel(labelConfig: UnsafeObject): Promise<boolean>;
-  printLabels(labelsConfig: UnsafeObject[]): Promise<boolean>;
+  printLabel(labelConfig: Object): Promise<boolean>;
+  printLabels(labelsConfig: ReadonlyArray<Object>): Promise<boolean>;
 
   // Utility
   feedPaper(lines: number): Promise<boolean>;
